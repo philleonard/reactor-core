@@ -29,6 +29,7 @@ import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BiConsumer;
+import java.util.function.BiFunction;
 import java.util.function.Supplier;
 
 import reactor.core.Disposable;
@@ -36,6 +37,7 @@ import reactor.core.Exceptions;
 import reactor.core.Scannable;
 import reactor.util.Logger;
 import reactor.util.Loggers;
+import reactor.util.Metrics;
 import reactor.util.annotation.Nullable;
 
 import static reactor.core.Exceptions.unwrap;
@@ -374,6 +376,30 @@ public abstract class Schedulers {
 	}
 
 	/**
+	 * If Micrometer is available, set-up a {@link Factory} that will instrument any
+	 * {@link ExecutorService} that backs a {@link Scheduler}. Note that this replaces the
+	 * global {@link Schedulers} factory, and shouldn't be used if you need to otherwise
+	 * customize it. No-op if Micrometer isn't available.
+	 */
+	public static void enableMetrics() {
+		if (Metrics.isInstrumentationAvailable()) {
+			Schedulers.setFactory(METRICS_FACTORY);
+		}
+	}
+
+	/**
+	 * If Micrometer is available and {@link #enableMetrics()} has been previously called,
+	 * resets the {@link Schedulers} {@link Factory} to its default. Note that if you need
+	 * to revert to a custom {@link Factory}, you shouldn't use this method, but {@link #setFactory(Factory)}
+	 * instead. No-op if Micrometer isn't available or {@link #enableMetrics()} hasn't been called.
+	 */
+	public static void disableMetrics() {
+		if (Metrics.isInstrumentationAvailable() && factory == METRICS_FACTORY) {
+			Schedulers.resetFactory();
+		}
+	}
+
+	/**
 	 * Re-apply default factory to {@link Schedulers}
 	 */
 	public static void resetFactory(){
@@ -535,8 +561,18 @@ public abstract class Schedulers {
 
 	static final Supplier<Scheduler> SINGLE_SUPPLIER = () -> newSingle(SINGLE, true);
 
-	static final Factory DEFAULT = new Factory() {
+	static final Factory DEFAULT = new Factory() { };
+
+	static final BiFunction<String, Supplier<? extends ScheduledExecutorService>, ScheduledExecutorService> METRICS_DECORATOR = Metrics.instrumentedExecutorService();
+
+	static final Factory METRICS_FACTORY   = new Factory() {
+		@Override
+		public ScheduledExecutorService decorateExecutorService(String schedulerType,
+				Supplier<? extends ScheduledExecutorService> actual) {
+			return METRICS_DECORATOR.apply(schedulerType, actual);
+		}
 	};
+
 
 	static volatile Factory factory = DEFAULT;
 
